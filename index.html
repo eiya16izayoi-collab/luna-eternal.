@@ -20,38 +20,12 @@
 <body class="bg-slate-950 text-white min-h-screen">
     <div id="root"></div>
 
-    <script type="text/babel" data-type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getFirestore, doc, setDoc, onSnapshot, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-
-        const { useState, useEffect, useRef } = React;
-
-        const getFirebaseInstance = () => {
-            let config = {};
-            try {
-                config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-            } catch (e) {
-                console.error("Config parse error:", e);
-            }
-            if (!config.apiKey) return { auth: null, db: null, appId: 'default-id' };
-            const app = initializeApp(config);
-            const auth = getAuth(app);
-            const db = getFirestore(app);
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'number-reach-solo-v1';
-            return { auth, db, appId };
-        };
-
-        const { auth, db, appId } = getFirebaseInstance();
+    <script type="text/babel">
+        const { useState, useEffect } = React;
 
         const Icon = ({ name, className = "" }) => {
             const icons = {
                 user: <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />,
-                target: (
-                    <React.Fragment>
-                        <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
-                    </React.Fragment>
-                ),
                 play: <polygon points="5 3 19 12 5 21 5 3"/>,
                 send: (
                     <React.Fragment>
@@ -72,42 +46,12 @@
         };
 
         const App = () => {
-            const [user, setUser] = useState(null);
-            const [roomName, setRoomName] = useState('');
             const [userName, setUserName] = useState('');
             const [isJoined, setIsJoined] = useState(false);
             const [gameState, setGameState] = useState(null);
             const [inputVal, setInputVal] = useState('');
             const [currentOp, setCurrentOp] = useState('mul');
             const [error, setError] = useState('');
-            const [loading, setLoading] = useState(false);
-
-            useEffect(() => {
-                if (!auth) return;
-                const initAuth = async () => {
-                    try {
-                        const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                        if (token) await signInWithCustomToken(auth, token);
-                        else await signInAnonymously(auth);
-                    } catch (err) { console.error("Auth Error", err); }
-                };
-                initAuth();
-                const unsubscribe = onAuthStateChanged(auth, setUser);
-                return () => unsubscribe();
-            }, []);
-
-            useEffect(() => {
-                if (!db || !user || !isJoined || !roomName) return;
-                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomName);
-                const unsubscribe = onSnapshot(roomRef, (snapshot) => {
-                    if (snapshot.exists()) {
-                        setGameState(snapshot.data());
-                    }
-                }, (err) => {
-                    setError("データの同期に失敗しました。");
-                });
-                return () => unsubscribe();
-            }, [user, isJoined, roomName]);
 
             const generateTarget = () => {
                 const isPrime = (n) => {
@@ -119,86 +63,81 @@
                 return t;
             };
 
-            const handleJoin = async () => {
-                if (!auth || !db) return setError("接続エラー");
-                if (!userName.trim() || !roomName.trim()) return setError("入力を確認してください");
-                setLoading(true);
-                try {
-                    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomName);
-                    const snap = await getDoc(roomRef);
-                    if (!snap.exists()) {
-                        await setDoc(roomRef, {
-                            target: generateTarget(),
-                            current: 1, turn: 1, maxTurns: 100,
-                            players: [{ id: user.uid, name: userName }],
-                            turnIndex: 0, status: 'waiting',
-                            history: [`${userName}がルームを作成しました`],
-                            lastInput: null, winner: null, hostId: user.uid
-                        });
-                    } else {
-                        const data = snap.data();
-                        if (!data.players.find(p => p.id === user.uid)) {
-                            await updateDoc(roomRef, {
-                                players: [...data.players, { id: user.uid, name: userName }],
-                                history: [...data.history, `${userName}が入室しました`]
-                            });
-                        }
-                    }
-                    setIsJoined(true);
-                } catch (err) { setError("入室失敗"); }
-                setLoading(false);
-            };
-
-            const handleStart = async () => {
-                if (!gameState) return;
-                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomName);
-                await updateDoc(roomRef, { status: 'playing', history: [...gameState.history, "ゲーム開始！ターゲットを目指しましょう"] });
-            };
-
-            const processMove = async (val, op, actorName) => {
-                if (!gameState) return;
-
-                let next = op === 'mul' ? gameState.current * val : gameState.current / val;
-                next = Math.round(next * 1000) / 1000;
-                let status = 'playing';
-                let winner = null;
-                const history = [...gameState.history, `${actorName}: ${op==='mul'?'×':'÷'}${val} → ${next.toLocaleString()}`];
-
-                if (next > gameState.target + 0.001) {
-                    status = 'finished'; winner = "バースト！ターゲットを超えてしまいました。";
-                } else if (Math.abs(next - gameState.target) < 0.01) {
-                    status = 'finished'; winner = `おめでとうございます！ターゲット達成！ (${gameState.turn}ターン)`;
-                } else if (gameState.turn >= gameState.maxTurns) {
-                    status = 'finished'; winner = "ターン切れ（100ターン経過）";
-                }
-
-                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomName);
-                await updateDoc(roomRef, {
-                    current: next,
-                    turn: gameState.turn + 1,
-                    turnIndex: (gameState.turnIndex + 1) % gameState.players.length,
-                    status,
-                    history: history.slice(-15),
-                    lastInput: val,
-                    winner
+            const handleJoin = () => {
+                if (!userName.trim()) return setError("名前を入力してください");
+                
+                setGameState({
+                    target: generateTarget(),
+                    current: 1,
+                    turn: 1,
+                    maxTurns: 100,
+                    players: [{ id: 'me', name: userName }],
+                    turnIndex: 0,
+                    status: 'waiting',
+                    history: [`${userName}がルームを作成しました`],
+                    lastInput: null,
+                    winner: null
                 });
+                setIsJoined(true);
+                setError('');
             };
 
-            const handleAction = async () => {
-                if (!user || gameState?.status !== 'playing') return;
+            const handleStart = () => {
+                setGameState(prev => ({
+                    ...prev,
+                    status: 'playing',
+                    history: [...prev.history, "ゲーム開始！ターゲットを目指しましょう"]
+                }));
+            };
+
+            const handleAction = () => {
                 const val = parseFloat(inputVal);
                 if (isNaN(val) || val <= 0 || val > 100) return setError("1〜100を入力してください");
                 if (val === 1 && gameState.lastInput === 1) return setError("1を連続で使うことはできません");
-                await processMove(val, currentOp, userName);
+                
+                setError('');
+                let next = currentOp === 'mul' ? gameState.current * val : gameState.current / val;
+                next = Math.round(next * 1000) / 1000;
+                
+                let status = 'playing';
+                let winner = null;
+                const newHistory = [...gameState.history, `${userName}: ${currentOp==='mul'?'×':'÷'}${val} → ${next.toLocaleString()}`];
+
+                if (next > gameState.target + 0.001) {
+                    status = 'finished';
+                    winner = "バースト！ターゲットを超えてしまいました。";
+                } else if (Math.abs(next - gameState.target) < 0.01) {
+                    status = 'finished';
+                    winner = `おめでとうございます！ターゲット達成！ (${gameState.turn}ターン)`;
+                } else if (gameState.turn >= gameState.maxTurns) {
+                    status = 'finished';
+                    winner = "ターン切れ（100ターン経過）";
+                }
+
+                setGameState(prev => ({
+                    ...prev,
+                    current: next,
+                    turn: prev.turn + 1,
+                    status,
+                    winner,
+                    lastInput: val,
+                    history: newHistory.slice(-15)
+                }));
                 setInputVal('');
             };
 
-            const handleReset = async () => {
-                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomName);
-                await updateDoc(roomRef, {
+            const handleReset = () => {
+                setGameState({
                     target: generateTarget(),
-                    current: 1, turn: 1, turnIndex: 0, status: 'playing',
-                    history: ["リスタート！"], lastInput: null, winner: null
+                    current: 1,
+                    turn: 1,
+                    maxTurns: 100,
+                    players: [{ id: 'me', name: userName }],
+                    turnIndex: 0,
+                    status: 'playing',
+                    history: ["リスタート！"],
+                    lastInput: null,
+                    winner: null
                 });
             };
 
@@ -206,33 +145,37 @@
                 return (
                     <div className="flex items-center justify-center min-h-screen p-4">
                         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
-                            <h1 className="text-4xl font-black text-center bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent mb-8 italic uppercase tracking-tighter">Number Reach Solo</h1>
+                            <h1 className="text-4xl font-black text-center bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent mb-8 italic uppercase tracking-tighter text-white">Number Reach Solo</h1>
                             <div className="space-y-6">
-                                <input type="text" value={userName} onChange={e => setUserName(e.target.value)} placeholder="あなたの名前" className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-center font-bold text-white outline-none focus:ring-2 focus:ring-cyan-500" />
-                                <input type="text" value={roomName} onChange={e => setRoomName(e.target.value)} placeholder="ルーム名（合言葉）" className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-center font-bold text-white outline-none focus:ring-2 focus:ring-cyan-500" />
+                                <input 
+                                    type="text" 
+                                    value={userName} 
+                                    onChange={e => setUserName(e.target.value)} 
+                                    placeholder="あなたの名前" 
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-center font-bold text-white outline-none focus:ring-2 focus:ring-cyan-500" 
+                                />
                                 {error && <p className="text-red-400 text-xs text-center">{error}</p>}
-                                <button onClick={handleJoin} disabled={loading || !user} className="w-full bg-cyan-600 hover:bg-cyan-500 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95 disabled:opacity-50 text-white">開始準備</button>
+                                <button 
+                                    onClick={handleJoin} 
+                                    className="w-full bg-cyan-600 hover:bg-cyan-500 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95 text-white"
+                                >
+                                    開始準備
+                                </button>
                             </div>
                         </div>
                     </div>
                 );
             }
 
-            if (!gameState) return <div className="flex items-center justify-center min-h-screen font-bold animate-pulse text-cyan-500 tracking-widest">CONNECTING...</div>;
-
-            const isMyTurn = gameState.status === 'playing' && gameState.players[gameState.turnIndex]?.id === user.uid;
-
             return (
                 <div className="p-4 md:p-8 flex flex-col items-center max-w-4xl mx-auto">
                     <div className="flex flex-wrap gap-2 mb-8 justify-center">
-                        {gameState.players.map((p, i) => (
-                            <div key={p.id} className={`flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-bold transition-all ${gameState.turnIndex === i && gameState.status === 'playing' ? 'bg-cyan-500 border-cyan-400 text-white scale-105 shadow-lg' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>
-                                <Icon name="user" className="w-3 h-3" /> {p.name}
-                            </div>
-                        ))}
+                        <div className={`flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-bold transition-all bg-cyan-500 border-cyan-400 text-white shadow-lg`}>
+                            <Icon name="user" className="w-3 h-3" /> {userName}
+                        </div>
                     </div>
 
-                    <div className="w-full grid md:grid-cols-2 gap-4 mb-8">
+                    <div className="w-full grid md:grid-cols-2 gap-4 mb-8 text-white">
                         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center shadow-inner">
                             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Target</p>
                             <p className="text-4xl font-black text-cyan-400 font-mono tracking-tighter">{gameState.target.toLocaleString()}</p>
@@ -255,7 +198,7 @@
                                 </button>
                             </div>
                         ) : gameState.status === 'playing' ? (
-                            <div className={`space-y-4 ${!isMyTurn ? 'opacity-40 pointer-events-none' : ''}`}>
+                            <div className="space-y-4">
                                 <div className="p-3 bg-slate-900 border border-slate-800 rounded-2xl text-center font-bold text-xs text-slate-400 flex items-center justify-center gap-2">
                                     <span className="text-cyan-500">Turn {gameState.turn}</span> / 100
                                 </div>
@@ -264,7 +207,13 @@
                                     <button onClick={() => setCurrentOp('div')} className={`py-4 rounded-2xl font-black text-3xl border-b-4 transition-all ${currentOp === 'div' ? 'bg-cyan-600 border-cyan-800 text-white' : 'bg-slate-800 border-slate-900 text-slate-600'}`}>÷</button>
                                 </div>
                                 <div className="flex gap-3">
-                                    <input type="number" value={inputVal} onChange={e => setInputVal(e.target.value)} placeholder="1〜100" className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-4 outline-none font-bold text-2xl text-center shadow-inner text-white" />
+                                    <input 
+                                        type="number" 
+                                        value={inputVal} 
+                                        onChange={e => setInputVal(e.target.value)} 
+                                        placeholder="1〜100" 
+                                        className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-4 outline-none font-bold text-2xl text-center shadow-inner text-white" 
+                                    />
                                     <button onClick={handleAction} className="bg-emerald-600 hover:bg-emerald-500 px-8 rounded-2xl flex items-center justify-center text-white active:scale-95 transition-all shadow-lg"><Icon name="send" /></button>
                                 </div>
                                 {error && <p className="text-red-400 text-xs text-center font-bold">{error}</p>}
